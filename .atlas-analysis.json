@@ -1,0 +1,69 @@
+{
+  "projectType": "api-service",
+  "projectName": "Social Media Fetcher",
+  "projectDescription": "A Node.js REST API for bulk downloading images and videos from major social media platforms using browser automation and direct API consumption.",
+  "theme": "sequoia",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4338ca",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "configuration"]
+          },
+          {
+            "group": "Architecture",
+            "pages": ["architecture/overview", "architecture/engines", "architecture/concurrency"]
+          },
+          {
+            "group": "Guides",
+            "pages": ["guides/authentication", "guides/session-setup", "guides/downloading-media"]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/overview",
+              "api/deviantart",
+              "api/onlyfans",
+              "api/pixiv",
+              "api/x-twitter",
+              "api/threads",
+              "api/tiktok",
+              "api/pinterest",
+              "api/instagram"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Bulk media download (images & videos) from 8 social platforms",
+    "Browser automation with Puppeteer stealth for bot-detection bypass",
+    "Session/cookie injection for authenticated platform access",
+    "Concurrent download pooling via configurable THREADS_DOWNLOAD",
+    "Smart scroll with stagnation detection for infinite feed platforms",
+    "Direct REST API consumption for Pixiv and Pinterest (high-speed)",
+    "Browser profile persistence for OnlyFans session management",
+    "Cross-platform filename sanitization for Windows/Linux compatibility"
+  ],
+  "publicApiSurface": [
+    "GET /deviantart/get-all-media?username=&limit=",
+    "GET /onlyfans/get-all-media?username=&limit=",
+    "GET /pixiv/get-all-media?userId=&limit=&mediaType=",
+    "GET /x/get-all-media?username=&limit=&method=",
+    "GET /threads/get-all-media?username=&limit=",
+    "GET /tiktok/get-all-media?username=&limit=",
+    "GET /pinterest/get-all-media?username=&limit=",
+    "GET /instagram/get-all-media?username=&limit="
+  ]
+}
