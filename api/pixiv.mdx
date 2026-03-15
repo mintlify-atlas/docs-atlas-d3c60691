@@ -1,0 +1,109 @@
+---
+title: 'Pixiv'
+description: 'High-speed bulk download of illustrations and manga from Pixiv using the internal API.'
+---
+
+## Endpoint
+
+```
+GET /pixiv/get-all-media
+```
+
+## Parameters
+
+<ParamField query="userId" type="string" required>
+  Pixiv user ID — the **numeric** ID found in the profile URL: `pixiv.net/en/users/<userId>`. This is not the display username.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of works (illustrations or manga volumes) to download. Omit for no limit. Note that a single work may contain multiple pages — all pages of each work are always downloaded.
+</ParamField>
+
+<ParamField query="mediaType" type="string">
+  Filter by content type. Accepted values: `illust`, `manga`. Omit to download both. Multiple values can be passed as a comma-separated string: `illust,manga`.
+</ParamField>
+
+## Example
+
+```bash
+# Download all illustrations for user 123456
+curl "http://localhost:3000/pixiv/get-all-media?userId=123456"
+
+# Download up to 20 manga works only
+curl "http://localhost:3000/pixiv/get-all-media?userId=123456&limit=20&mediaType=manga"
+```
+
+## How it works
+
+Pixiv uses a pure REST approach — no browser automation required.
+
+1. **Profile fetch** — Two parallel requests are made: one to `/ajax/user/<userId>?full=1` for profile metadata and one to `/ajax/user/<userId>/profile/all` for the full list of illustration and manga IDs.
+2. **Chunk processing** — Work IDs are batched into chunks of 48 and fetched from the `/profile/illusts` endpoint in parallel. This matches Pixiv's internal pagination and minimises round-trips.
+3. **Multi-page support** — For each work, the engine calls `/ajax/illust/<id>/pages` to retrieve all page URLs. A manga or illustration set with 50 pages will produce 50 individual download tasks.
+4. **Referer spoofing** — Every download request includes the correct `Referer` header (`https://www.pixiv.net/en/artworks/<id>`). Without this header, Pixiv CDN returns a `403 Forbidden`.
+
+<Columns cols={2}>
+  <Card title="Chunk processing" icon="layer-group">
+    Work metadata is fetched in batches of 48 items to match Pixiv's internal API pagination.
+  </Card>
+  <Card title="Multi-page support" icon="book-open">
+    Every page of a multi-image illustration or manga chapter is downloaded individually.
+  </Card>
+  <Card title="Referer spoofing" icon="link">
+    Correct `Referer` header is injected per file to satisfy Pixiv CDN access controls.
+  </Card>
+  <Card title="High-speed REST" icon="bolt">
+    No Puppeteer — direct API calls make this the fastest SMF engine.
+  </Card>
+</Columns>
+
+## Environment variables
+
+| Variable | Cookie name | Description |
+|---|---|---|
+| `PIXIV_PHPSESSID` | `PHPSESSID` | Session cookie from `pixiv.net` |
+
+```env
+PIXIV_PHPSESSID=your_phpsessid_value
+```
+
+<Note>
+  To find your `PHPSESSID`, log in to Pixiv in a browser and inspect the cookies for `pixiv.net`. The value is a long alphanumeric string.
+</Note>
+
+## File layout
+
+Files are saved under `storage/pixiv/<nickname>/` and organised by type and work title:
+
+```
+storage/pixiv/<nickname>/
+├── illustrations/
+│   └── <sanitised_title>/
+│       ├── <workId>_p0.jpg
+│       └── <workId>_p1.jpg
+└── mangas/
+    └── <sanitised_title>/
+        └── <workId>_p0.jpg
+```
+
+## Response
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": "123456",
+    "username": "artist_account",
+    "nickname": "Artist Name",
+    "picture": "https://i.pximg.net/user-profile/img/...",
+    "url": "https://www.pixiv.net/en/users/123456"
+  },
+  "total_requested": 20,
+  "total_processed": 20,
+  "downloads": [
+    { "status": "downloaded", "fileName": "profile_picture.jpg" },
+    { "status": "downloaded", "fileName": "98765432_p0.jpg" },
+    { "status": "downloaded", "fileName": "98765432_p1.jpg" }
+  ]
+}
+```

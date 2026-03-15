@@ -1,0 +1,96 @@
+---
+title: 'X (Twitter)'
+description: 'Download media from X (Twitter) user timelines with stagnation detection.'
+---
+
+## Endpoint
+
+```
+GET /x/get-all-media
+```
+
+## Parameters
+
+<ParamField query="username" type="string" required>
+  X (Twitter) username. Do not include the `@` symbol — it is stripped automatically.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of media items to collect. Omit for no limit.
+</ParamField>
+
+<ParamField query="method" type="string" default="normal">
+  Download strategy:
+  - `normal` (default) — each media item is downloaded immediately as it is intercepted while scrolling (realtime).
+  - `batch` — all media URLs are collected first, then downloaded together after scrolling is complete.
+</ParamField>
+
+## Examples
+
+```bash
+# Default realtime download
+curl "http://localhost:3000/x/get-all-media?username=NASA"
+
+# Batch mode with a limit of 200 items
+curl "http://localhost:3000/x/get-all-media?username=NASA&limit=200&method=batch"
+```
+
+## How it works
+
+1. **Cookie injection** — The `auth_token` cookie is set from `X_AUTH_TOKEN` before navigation. This allows access to the `/media` tab of any account the authenticated user can see.
+2. **Network interception** — The engine listens for `UserTweets` and `UserMedia` GraphQL responses. Each response is parsed by `extractMediaFromXJson` to yield individual media items and user profile data.
+3. **Dual-method processing**:
+   - In `normal` mode, download promises are queued (`pending`) and started immediately as new items are found.
+   - In `batch` mode, tasks are pushed to `allTasks` and processed with `mapLimit` after scrolling ends.
+4. **Stagnation detection** — After each scroll, the engine checks whether the number of collected items has increased. If `seenIds.size` does not grow for 3 consecutive scroll attempts (`MAX_STAGNATION = 3`), the loop terminates. This handles rate-limited sessions and profiles with restricted visibility.
+5. **Human simulation** — `moveMouseInCircle` is called before each scroll to reduce the likelihood of bot detection.
+
+<Columns cols={2}>
+  <Card title="Realtime mode" icon="play">
+    Files are downloaded in parallel while the scroll loop is still running, reducing total wall-clock time.
+  </Card>
+  <Card title="Batch mode" icon="database">
+    All URLs are collected before downloading — useful when you need a complete manifest before any I/O.
+  </Card>
+  <Card title="Stagnation detection" icon="triangle-exclamation">
+    Automatically exits after 3 scroll cycles with no new content, preventing infinite loops on restricted profiles.
+  </Card>
+  <Card title="Human simulation" icon="computer-mouse">
+    Mouse movement simulation reduces bot-detection triggers on X's anti-automation layer.
+  </Card>
+</Columns>
+
+## Environment variables
+
+| Variable | Cookie name | Description |
+|---|---|---|
+| `X_AUTH_TOKEN` | `auth_token` | Authentication cookie from `x.com` |
+
+```env
+X_AUTH_TOKEN=your_auth_token_value
+```
+
+<Note>
+  To find your `auth_token`, log in to X in a browser and inspect the cookies for the `.x.com` domain.
+</Note>
+
+## Response
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": "11348282",
+    "username": "NASA",
+    "nickname": "NASA",
+    "picture": "https://pbs.twimg.com/profile_images/.../photo.jpg",
+    "url": "https://x.com/NASA"
+  },
+  "total_requested": 200,
+  "total_proccessed": 200,
+  "downloads": [
+    { "status": "downloaded", "fileName": "1234567890_photo.jpg" },
+    { "status": "downloaded", "fileName": "1234567891_video.mp4" }
+  ]
+}
+```

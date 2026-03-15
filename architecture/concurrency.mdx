@@ -1,0 +1,123 @@
+---
+title: "Concurrency model"
+description: "How SMF manages parallel downloads using a bounded promise pool."
+---
+
+SMF does not use `Promise.all` for downloads. Instead, it uses a custom bounded promise pool called `mapLimit` that keeps the number of active downloads capped at a configurable ceiling.
+
+## The `mapLimit` function
+
+The full implementation lives in `utils/utils.js`:
+
+```javascript
+const mapLimit = async (items, limit, fn) => {
+    const results = [];
+    const executing = [];
+    for (const item of items) {
+        const p = Promise.resolve().then(() => fn(item));
+        results.push(p);
+        if (limit <= items.length) {
+            const e = p.then(() => executing.splice(executing.indexOf(e), 1));
+            executing.push(e);
+            if (executing.length >= limit) {
+                await Promise.race(executing);
+            }
+        }
+    }
+    return Promise.all(results);
+}
+```
+
+**How it works, step by step:**
+
+1. For each item, a promise `p` is created by calling `fn(item)`.
+2. A second promise `e` wraps `p` and removes itself from the `executing` array when it settles.
+3. `e` is pushed onto the `executing` array.
+4. When `executing.length >= limit`, the loop pauses with `await Promise.race(executing)` — waiting only until the *fastest* in-flight download finishes before starting the next one.
+5. `Promise.all(results)` at the end waits for every item to complete and returns all results in the original order.
+
+This means the pool always has exactly `limit` (or fewer) active downloads at any point, and the next download starts the moment any current one finishes — with zero idle time.
+
+## Why not `Promise.all`?
+
+`Promise.all` launches every task simultaneously:
+
+```javascript
+// Launches all 200 downloads at once — dangerous
+await Promise.all(tasks.map(task => downloadFile(task.url, ...)));
+```
+
+For a profile with 200 images, this creates 200 simultaneous HTTP connections. The consequences:
+
+- **IP rate limiting**: Most platforms measure requests per second. A burst of 200 concurrent requests is immediately flagged and results in a temporary IP ban or HTTP 429 responses.
+- **CPU/memory spikes**: Buffering hundreds of streams simultaneously exhausts available memory on typical hardware.
+- **Unreliable results**: If even one request fails, `Promise.all` rejects immediately and all other in-flight downloads are abandoned.
+
+`mapLimit` avoids all of these problems.
+
+## Configuring `THREADS_DOWNLOAD`
+
+The `THREADS_DOWNLOAD` environment variable sets the `limit` argument passed to `mapLimit` throughout the codebase:
+
+```javascript
+// deviantartController.js
+const allDownloadedResults = await mapLimit(
+    tasks,
+    process.env.THREADS_DOWNLOAD || 5,
+    async (task) => {
+        const result = await downloadFile(task.url, task.dest, task.filename, headers);
+        const jitter = Math.floor(Math.random() * 1000) + 500;
+        await new Promise(r => setTimeout(r, jitter));
+        return result;
+    }
+);
+```
+
+The default value is `5`. Set it in your `.env`:
+
+```env
+THREADS_DOWNLOAD=5
+```
+
+### Choosing the right value
+
+| Value | Use case |
+|---|---|
+| `1–2` | Aggressive anti-bot platforms, slow connections, or when you've recently hit a rate limit |
+| `3–5` | Default. Balanced throughput without triggering most platform rate limits |
+| `8–10` | High-bandwidth connections downloading from lenient platforms (e.g., DeviantArt with valid auth) |
+| `15+` | Use only for Pixiv metadata fetching (not file downloads), which uses a separate `mapLimit` call with a limit of 15 for parallel API requests |
+
+<Warning>
+  Setting `THREADS_DOWNLOAD` above 10 for file downloads significantly increases the risk of IP bans on most platforms. The default of 5 is deliberately conservative.
+</Warning>
+
+## Thermal stability and rate-limit avoidance
+
+Beyond the pool cap, several controllers add a random **jitter delay** between downloads — for example, DeviantArt adds 500–1500 ms between each file:
+
+```javascript
+const jitter = Math.floor(Math.random() * 1000) + 500;
+await new Promise(r => setTimeout(r, jitter));
+```
+
+This randomization matters because deterministic, evenly-spaced requests (e.g., one every 200 ms) are detectable by platform firewalls as automated traffic. Randomized delays mimic the irregular timing of a human manually saving files.
+
+<Note>
+  Pinterest adds an 800 ms page-level delay between bookmark pages. OnlyFans uses a `hasMore`-driven smart scroll that reads the API's own pagination signal before requesting the next page. Both reduce the risk of a session ban during long scraping runs.
+</Note>
+
+## Example: downloading 100 images with `THREADS_DOWNLOAD=5`
+
+```
+Time →
+
+[DL 1  ████████████░░░░░░░░░░░░░░░░░░]
+[DL 2  ████████████████████░░░░░░░░░░]
+[DL 3  ██████████████░░░░░░░░░░░░░░░░]
+[DL 4  ██████░░░░░░░░░░░░░░░░░░░░░░░░]
+[DL 5  ████████████████░░░░░░░░░░░░░░]
+[DL 6         ↑ starts when DL 4 finishes]
+```
+
+At no point are more than 5 connections open simultaneously. As soon as any download completes, the next task from the queue is started immediately — keeping all 5 slots filled throughout.

@@ -1,0 +1,101 @@
+---
+title: 'DeviantArt'
+description: 'Bulk download galleries, banners, and avatars from DeviantArt profiles.'
+---
+
+## Endpoint
+
+```
+GET /deviantart/get-all-media
+```
+
+## Parameters
+
+<ParamField query="username" type="string" required>
+  DeviantArt username. The leading `@` is stripped automatically if present.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of items to download. Set to `0` or omit for no limit. The count includes the profile header and avatar.
+</ParamField>
+
+## Example
+
+```bash
+curl "http://localhost:3000/deviantart/get-all-media?username=Loish&limit=50"
+```
+
+## How it works
+
+The DeviantArt engine uses a hybrid Puppeteer/REST approach:
+
+1. **Authentication** — PerimeterX cookies (`_px`, `_pxvid`, `pxcts`) are injected from environment variables. A real-time network interception captures the `csrf_token` from the first authenticated request.
+2. **Profile metadata** — The profile header (banner) is extracted via computed CSS evaluation on the DOM. The avatar URL is retrieved from the API `usericon` field.
+3. **Gallery fetch** — When authenticated, the controller calls the internal DeviantArt API to collect all gallery item URLs. When unauthenticated (cookie bypass failed), it falls back to HTML scraping.
+4. **Smart fallback URLs** — If the primary download token (`token[1]`) is absent, the engine constructs a fullview URL from the view token (`token[0]`) to preserve maximum image quality.
+5. **File extension mapping** — The correct extension (`.jpg`, `.png`, etc.) is determined from the `filetype` field in the API response, not guessed from the URL.
+6. **Downloads** — All tasks are executed concurrently via `mapLimit` with a random 500–1500 ms jitter between each file to avoid rate limiting.
+
+<Columns cols={2}>
+  <Card title="Profile metadata" icon="image">
+    Header banner and avatar are always downloaded as `profile_header.jpg` and `profile_picture.jpg`.
+  </Card>
+  <Card title="Smart fallback" icon="rotate">
+    Falls back to fullview URL when the original download token is unavailable.
+  </Card>
+  <Card title="Anti-bot bypass" icon="shield">
+    Injects PerimeterX cookies and intercepts CSRF token in real time.
+  </Card>
+  <Card title="Dynamic extensions" icon="file">
+    File extension is mapped from the API `filetype` schema, not assumed from the URL.
+  </Card>
+</Columns>
+
+## Environment variables
+
+<Warning>
+  The DeviantArt engine requires all six PerimeterX-related cookies to be present. Without them, requests will be blocked before any gallery data is returned.
+</Warning>
+
+| Variable | Cookie name | Description |
+|---|---|---|
+| `DA_AUTH` | `auth` | Main authentication cookie |
+| `DA_AUTH_SECURE` | `auth_secure` | Secure auth cookie |
+| `DA_USERINFO` | `userinfo` | User session info |
+| `DA_PX` | `_px` | PerimeterX long-lived token |
+| `DA_PXVID` | `_pxvid` | PerimeterX visitor ID |
+| `DA_PXCTS` | `pxcts` | PerimeterX timestamp |
+
+Add these to your `.env` file:
+
+```env
+DA_AUTH=your_auth_cookie_value
+DA_AUTH_SECURE=your_auth_secure_value
+DA_USERINFO=your_userinfo_value
+DA_PX=your_px_value
+DA_PXVID=your_pxvid_value
+DA_PXCTS=your_pxcts_value
+```
+
+## Response
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": "12345678",
+    "username": "Loish",
+    "nickname": "Loish",
+    "picture": "https://a.deviantart.net/avatars-big/l/o/loish.jpg",
+    "url": "https://www.deviantart.com/Loish",
+    "header": "https://images-wixmp-ed30a86b8c4ca887773594c2.wixmp.com/f/..."
+  },
+  "total_requested": 50,
+  "total_processed": 50,
+  "downloads": [
+    { "status": "downloaded", "fileName": "profile_header.jpg" },
+    { "status": "downloaded", "fileName": "profile_picture.jpg" },
+    { "status": "downloaded", "fileName": "123456789_p0.png" }
+  ]
+}
+```

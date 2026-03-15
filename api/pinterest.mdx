@@ -1,0 +1,98 @@
+---
+title: 'Pinterest'
+description: 'Paginate through Pinterest boards and download all images and videos.'
+---
+
+## Endpoint
+
+```
+GET /pinterest/get-all-media
+```
+
+## Parameters
+
+<ParamField query="username" type="string" required>
+  Pinterest username as it appears in the profile URL: `pinterest.com/<username>/`.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of media items to download. Omit for no limit. The count includes the profile picture.
+</ParamField>
+
+## Example
+
+```bash
+curl "http://localhost:3000/pinterest/get-all-media?username=nasa&limit=200"
+```
+
+## How it works
+
+Pinterest uses a pure REST approach — no browser automation required.
+
+1. **Bookmark-based cursor pagination** — The engine calls `mx.pinterest.com/resource/UserActivityPinsResource/get/` with a `bookmarks` array. On the first request the array is empty; subsequent requests pass the `bookmark` value returned by the previous page. Pagination stops when the response returns `bookmark: "-end-"` or an empty pin list.
+2. **Profile metadata** — On the first pin, the `native_creator` or `pinner` field is used to build the profile object. The avatar URL is upgraded to the full-resolution `/originals/` variant by rewriting the path segment.
+3. **Video extraction** — Pins flagged as video (`is_video: true` or `story_pin_data.total_video_duration > 0`) are handled by fetching the pin's HTML page and extracting `.mp4` URLs from the `v1.pinimg.com/videos/` paths using a regex. The `iht/expMp4` quality is preferred, with `720w` as a fallback.
+4. **Image extraction** — Non-video pins use `pin.images.orig.url` for the highest-resolution image.
+5. **Rate limiting** — An 800 ms delay is inserted between paginated requests.
+
+<Columns cols={2}>
+  <Card title="Cursor pagination" icon="bookmark">
+    Bookmark-based cursor ensures all pins are fetched, even across boards with thousands of items.
+  </Card>
+  <Card title="Video support" icon="video">
+    Extracts highest-quality `.mp4` from the pin HTML page when video content is detected.
+  </Card>
+  <Card title="High-res images" icon="image">
+    Uses `images.orig.url` for full-resolution pin images.
+  </Card>
+  <Card title="Profile picture" icon="user">
+    Avatar URL is rewritten to the `/originals/` path for maximum quality.
+  </Card>
+</Columns>
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `PINTEREST_COOKIE` | Full cookie string from `pinterest.com` (value of `_pinterest_sess` and associated cookies) |
+
+```env
+PINTEREST_COOKIE=your_pinterest_cookie_string
+```
+
+## File layout
+
+```
+storage/pinterest/<username>/
+├── images/
+│   ├── profile_picture.jpg
+│   └── <pinId>.jpg
+└── videos/
+    └── <pinId>.mp4
+```
+
+## Response
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": "987654321",
+    "username": "nasa",
+    "nickname": "NASA",
+    "picture": "https://i.pinimg.com/originals/.../...",
+    "url": "https://www.pinterest.com/nasa/"
+  },
+  "total_requested": 200,
+  "total_proccessed": 200,
+  "files": [
+    { "status": "downloaded", "fileName": "profile_picture.jpg" },
+    { "status": "downloaded", "fileName": "123456789.jpg" },
+    { "status": "downloaded", "fileName": "987654321.mp4" }
+  ]
+}
+```
+
+<Note>
+  The Pinterest response uses `files` instead of `downloads` as the key for the file array.
+</Note>

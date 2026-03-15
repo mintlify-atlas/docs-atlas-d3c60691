@@ -1,0 +1,82 @@
+---
+title: 'Threads'
+description: 'Extract media from Threads profiles including hidden and spoiler-tagged content.'
+---
+
+## Endpoint
+
+```
+GET /threads/get-all-media
+```
+
+## Parameters
+
+<ParamField query="username" type="string" required>
+  Threads username. The leading `@` is stripped automatically if present.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of media items to download. Omit for no limit.
+</ParamField>
+
+## Example
+
+```bash
+curl "http://localhost:3000/threads/get-all-media?username=zuck&limit=100"
+```
+
+## How it works
+
+1. **Cookie injection** — `sessionid` and `csrftoken` cookies are injected from environment variables before navigation to `threads.com/@<username>/media`.
+2. **GraphQL interception** — The engine listens for `/graphql/query` and `/api/v1/` responses and pipes each through `extractMediaFromJson`, which parses the Threads GraphQL schema to extract image and video URLs along with profile data.
+3. **Profile picture extraction** — The profile picture is extracted from the page's `<meta>` tags via `extractProfilePictureFromMeta` immediately after the initial page load.
+4. **Spoiler and hidden content** — After each scroll cycle, `extractSpoilersFromHTML` scans the live DOM for content that is blurred or collapsed behind a spoiler overlay and extracts its media through `extractMediaFromJson`.
+5. **Stagnation detection** — If `seenIds.size` does not increase for 3 consecutive scroll cycles, the engine exits the loop to prevent infinite scrolling on profiles with restricted content.
+
+<Columns cols={2}>
+  <Card title="GraphQL consumption" icon="code">
+    Parses raw Threads GraphQL responses to extract media with full fidelity.
+  </Card>
+  <Card title="Spoiler detection" icon="eye-slash">
+    Detects and extracts media hidden behind spoiler overlays in the DOM.
+  </Card>
+  <Card title="Hidden content" icon="lock-open">
+    Captures content marked as sensitive that standard scrapers skip.
+  </Card>
+  <Card title="Stagnation guard" icon="circle-stop">
+    Exits automatically after 3 scroll cycles with no new media.
+  </Card>
+</Columns>
+
+## Environment variables
+
+| Variable | Cookie name | Description |
+|---|---|---|
+| `THREADS_SESSIONID` | `sessionid` | Session cookie from `threads.net` |
+| `THREADS_CSRF_TOKEN` | `csrftoken` | CSRF token from `threads.net` |
+
+```env
+THREADS_SESSIONID=your_sessionid_value
+THREADS_CSRF_TOKEN=your_csrftoken_value
+```
+
+## Response
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": "314216",
+    "username": "zuck",
+    "nickname": "Mark Zuckerberg",
+    "picture": "https://static.cdninstagram.com/rsrc.php/.../...",
+    "url": "https://www.threads.net/@zuck"
+  },
+  "total_requested": 100,
+  "total_proccessed": 100,
+  "downloads": [
+    { "status": "downloaded", "fileName": "3456789012345678901.jpg" },
+    { "status": "downloaded", "fileName": "3456789012345678902.mp4" }
+  ]
+}
+```

@@ -1,0 +1,91 @@
+---
+title: 'TikTok'
+description: 'Download watermark-free TikTok videos and profile photos.'
+---
+
+## Endpoint
+
+```
+GET /tiktok/get-all-media
+```
+
+## Parameters
+
+<ParamField query="username" type="string" required>
+  TikTok username. Do not include the `@` symbol — it is stripped automatically.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of media items to download. Omit for no limit. The count includes the profile picture.
+</ParamField>
+
+## Example
+
+```bash
+curl "http://localhost:3000/tiktok/get-all-media?username=tiktok&limit=30"
+```
+
+## How it works
+
+1. **Puppeteer with stealth** — A headless Chromium instance with `puppeteer-extra-plugin-stealth` navigates to `tiktok.com/@<username>`. No authentication cookies are required for public profiles.
+2. **API interception** — The engine intercepts `/api/post/item_list/` responses. Each response contains an `itemList` array with video metadata including the `bitrateInfo[0].PlayAddr.UrlList[0]` URL — TikTok's highest-bitrate, **watermark-free** download address. If `bitrateInfo` is absent, it falls back to `video.downloadAddr`.
+3. **Profile photo** — When the first `itemList` response arrives, the `author.avatarLarger` URL is queued as `profile_picture.jpg`.
+4. **`hasMore` flag** — The scroll loop continues as long as `data.hasMore` is `true`. When `hasMore` becomes `false`, or when the collected count reaches `limit`, scrolling stops.
+5. **Stall detection** — If the page height does not increase for 3 consecutive scroll attempts, the loop exits regardless of `hasMore`.
+
+<Columns cols={2}>
+  <Card title="Watermark-free" icon="droplet-slash">
+    Uses `bitrateInfo[0].PlayAddr.UrlList[0]` — TikTok's internal high-quality URL that omits the watermark.
+  </Card>
+  <Card title="Profile photo" icon="user">
+    Downloads `avatarLarger` as `profile_picture.jpg` alongside video content.
+  </Card>
+  <Card title="No credentials required" icon="lock-open">
+    Works on public profiles without any session cookies or API keys.
+  </Card>
+  <Card title="Stall detection" icon="gauge">
+    Exits when the page stops growing, preventing infinite loops on short profiles.
+  </Card>
+</Columns>
+
+<Note>
+  TikTok does not require any environment variables for public content. If the target profile is private or age-gated, the scraper will collect zero items.
+</Note>
+
+## File layout
+
+Files are saved under `storage/tiktok/<username>/`:
+
+```
+storage/tiktok/<username>/
+├── images/
+│   └── profile_picture.jpg
+└── videos/
+    ├── <videoId>.mp4
+    └── <videoId>.mp4
+```
+
+## Response
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": "107955",
+    "username": "tiktok",
+    "nickname": "TikTok",
+    "picture": "https://p16-sign.tiktokcdn-us.com/aweme/1080x1080/.../",
+    "url": "https://www.tiktok.com/@tiktok"
+  },
+  "total_requested": 30,
+  "total_proccessed": 30,
+  "results": [
+    { "status": "downloaded", "fileName": "profile_picture.jpg" },
+    { "status": "downloaded", "fileName": "7123456789012345678.mp4" }
+  ]
+}
+```
+
+<Note>
+  The TikTok response uses `results` instead of `downloads` as the key for the file array.
+</Note>

@@ -1,0 +1,179 @@
+---
+title: "Session setup"
+description: "How to set up persistent browser sessions for platforms that require manual login."
+---
+
+Most platforms authenticate through cookie injection — you extract session cookies from your browser and put them in `.env`. Two platforms require additional setup: **OnlyFans** uses a persistent browser profile to maintain login state, and **DeviantArt** requires PerimeterX anti-bot cookies that need periodic refresh.
+
+## OnlyFans: browser profile persistence
+
+OnlyFans cannot be authenticated through cookie injection alone. It uses aggressive bot detection that invalidates injected sessions. SMF works around this by using Puppeteer's `userDataDir` feature — a persistent Chrome profile directory that stores your login state just like a real browser would.
+
+### How it works
+
+SMF stores the OnlyFans browser profile at:
+
+```
+config/of_profile/
+```
+
+This path is relative to the root of the SMF project. When you make a request to `/onlyfans/get-all-media`, SMF launches Chrome with this directory as the user data folder:
+
+```javascript
+const USER_DATA_DIR = path.join(__dirname, '../config/of_profile');
+
+browser = await puppeteer.launch({
+    headless: false,
+    userDataDir: USER_DATA_DIR,
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--start-maximized',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process'
+    ]
+});
+```
+
+Notice that `headless: false` — the browser opens as a visible window. This is intentional so you can log in manually on the first run.
+
+### First-time setup
+
+<Steps>
+  <Step title="Start the SMF server">
+    Make sure your `.env` file is configured (at minimum `DIR_STORAGE` and `PORT`) and start the server:
+
+    ```bash
+    npm start
+    ```
+  </Step>
+  <Step title="Make your first OnlyFans request">
+    Send a request to the OnlyFans endpoint for any username:
+
+    ```bash
+    curl "http://localhost:3000/onlyfans/get-all-media?username=someusername"
+    ```
+
+    SMF will launch a visible Chrome window and navigate to `https://onlyfans.com/`.
+  </Step>
+  <Step title="Log in manually">
+    In the Chrome window that opens, log in to OnlyFans as you normally would. You have **5 minutes** before the request times out.
+
+    Once you complete the login, SMF detects the `auth_id` cookie and prints:
+
+    ```
+    ✅ Login detectado y persistido en el perfil.
+    ```
+  </Step>
+  <Step title="Session is saved automatically">
+    After login, the session is saved to `config/of_profile/`. All future requests reuse this profile and skip the manual login step entirely. The browser will still open (because `headless: false`), but it will navigate directly to the profile page without showing a login screen.
+  </Step>
+</Steps>
+
+<Warning>
+Do not delete the `config/of_profile/` folder unless you intend to reset your OnlyFans session. Deleting it means you will have to log in manually again on the next request. The folder can grow to several hundred megabytes over time as Chrome stores cached data.
+</Warning>
+
+<Tip>
+OnlyFans sessions do expire. If you get authentication errors or SMF opens a login screen again after a long period of inactivity, simply log in again in the browser window. The session will be refreshed and persisted automatically.
+</Tip>
+
+### How session detection works
+
+SMF checks for the `auth_id` cookie to determine whether you are logged in:
+
+```javascript
+const checkLogin = async (p) => {
+    const cookies = await p.cookies();
+    return cookies.some(c => c.name === 'auth_id');
+};
+```
+
+If the cookie is present, SMF prints `🟢 Sesión recuperada automáticamente desde el perfil.` and proceeds with the scrape. If it is absent, SMF waits up to 5 minutes for you to log in.
+
+---
+
+## DeviantArt: PerimeterX anti-bot cookies
+
+DeviantArt uses [PerimeterX](https://www.perimeterx.com/) to detect and block automated access. SMF bypasses this by injecting PerimeterX's own challenge cookies — cookies that PerimeterX generates and stores in your browser after it determines you are a real user.
+
+### The PerimeterX cookies
+
+Three cookies are involved:
+
+| Cookie | Env variable | Role |
+|---|---|---|
+| `_px` | `DA_PX` | Long-duration challenge response token. Proves you passed a prior PerimeterX challenge. |
+| `_pxvid` | `DA_PXVID` | PerimeterX visitor ID. Ties the session to a specific browser fingerprint. |
+| `pxcts` | `DA_PXCTS` | Client timestamp. Used for replay-attack prevention. |
+
+These cookies are set by PerimeterX scripts running on `deviantart.com`. You don't create them — you copy them from a browser session where you have already visited DeviantArt and passed its bot checks.
+
+### How SMF uses them
+
+The `utils/deviantart.js` utility formats all six DeviantArt cookies (auth + PerimeterX) into a Puppeteer-compatible cookie array:
+
+```javascript
+const formatCookies = () => {
+    const rawCookies = [
+        { name: 'auth',        value: process.env.DA_AUTH },
+        { name: 'auth_secure', value: process.env.DA_AUTH_SECURE },
+        { name: 'userinfo',    value: process.env.DA_USERINFO },
+        { name: '_px',         value: process.env.DA_PX },
+        { name: '_pxvid',      value: process.env.DA_PXVID },
+        { name: 'pxcts',       value: process.env.DA_PXCTS }
+    ];
+
+    return rawCookies
+        .filter(c => c.value !== undefined && c.value !== '')
+        .map(cookie => ({
+            name: cookie.name,
+            value: String(cookie.value).trim(),
+            domain: '.deviantart.com',
+            path: '/'
+        }));
+};
+```
+
+All six cookies are injected into the Puppeteer page at once before any requests are made. If the PerimeterX cookies are missing or stale, DeviantArt returns a challenge page and SMF throws a `"Bloqueo persistente: No se pudo extraer el CSRF Token"` error.
+
+### Refreshing PerimeterX cookies
+
+<Steps>
+  <Step title="Visit DeviantArt in your browser">
+    Open `https://www.deviantart.com` in Chrome or Firefox. Browse the site normally for a few seconds to allow PerimeterX to complete its challenge and write its cookies.
+  </Step>
+  <Step title="Open DevTools">
+    Press `F12`, go to the **Application** tab, then **Cookies** → `https://www.deviantart.com`.
+  </Step>
+  <Step title="Locate all six cookies">
+    Find and copy the values for: `auth`, `auth_secure`, `userinfo`, `_px`, `_pxvid`, and `pxcts`.
+  </Step>
+  <Step title="Update your .env file">
+    Replace the old values in your `.env`:
+
+    ```env
+    DA_AUTH=new_auth_value
+    DA_AUTH_SECURE=new_auth_secure_value
+    DA_USERINFO=new_userinfo_value
+    DA_PX=new_px_value
+    DA_PXVID=new_pxvid_value
+    DA_PXCTS=new_pxcts_value
+    ```
+  </Step>
+  <Step title="Restart the SMF server">
+    SMF reads `.env` at startup. Restart the server to pick up the new cookie values:
+
+    ```bash
+    npm start
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+PerimeterX cookies are shorter-lived than standard auth cookies. The `_px` token may expire within hours. If DeviantArt requests fail with a persistent block error, the first thing to check is whether your PerimeterX cookies need refreshing.
+</Warning>
+
+<Tip>
+The `_px` cookie description in the source is annotated as "Larga duración" (long duration). In practice, its lifetime depends on PerimeterX's server-side policy and your browsing behavior. Refresh all three PerimeterX cookies together whenever you see block errors.
+</Tip>

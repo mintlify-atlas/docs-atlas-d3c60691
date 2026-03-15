@@ -1,0 +1,91 @@
+---
+title: 'OnlyFans'
+description: 'Download media from OnlyFans profiles using persistent browser sessions.'
+---
+
+## Endpoint
+
+```
+GET /onlyfans/get-all-media
+```
+
+## Parameters
+
+<ParamField query="username" type="string" required>
+  OnlyFans username (the handle that appears in the profile URL at `onlyfans.com/<username>`).
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of media items to download. Omit for no limit.
+</ParamField>
+
+## Example
+
+```bash
+curl "http://localhost:3000/onlyfans/get-all-media?username=example_creator&limit=100"
+```
+
+## First-time setup
+
+<Warning>
+  OnlyFans requires a **manual first-time login** before the endpoint can be used. There are no `.env` cookies for OnlyFans — authentication is maintained entirely through a persistent browser profile stored at `config/of_profile`.
+</Warning>
+
+<Steps>
+  <Step title="Start the server">
+    Run `node app.js` to start SMF.
+  </Step>
+  <Step title="Call the endpoint">
+    Make a request to `/onlyfans/get-all-media?username=<any_username>`. A visible Chromium window will open and navigate to `onlyfans.com`.
+  </Step>
+  <Step title="Log in manually">
+    In the browser window, complete the OnlyFans login. The engine waits up to 5 minutes for the `auth_id` cookie to appear.
+  </Step>
+  <Step title="Session is persisted">
+    Once detected, the session is saved to `config/of_profile`. Subsequent requests will reuse this profile and skip the login step automatically.
+  </Step>
+</Steps>
+
+## How it works
+
+1. **Browser profile persistence** — Puppeteer is launched with `userDataDir` pointing to `config/of_profile`. If a valid `auth_id` cookie exists in the profile, login is skipped entirely.
+2. **Reactive ID interception** — The engine listens for the `/api2/v2/users/<username>` response to capture the numeric `userId`, display name, avatar, and header URL before any content is fetched.
+3. **Smart scroll with `hasMore`** — After navigating to `/<username>/media`, the engine scrolls the page and intercepts `/posts/medias` API responses. It checks the `hasMore` flag on each response to determine when the end of content has been reached, avoiding infinite loops.
+4. **File organisation** — Videos are saved under `storage/onlyfans/<username>/videos/<date>_<postId>_<text>/` and images under `.../images/...`.
+
+<Columns cols={2}>
+  <Card title="Session persistence" icon="cookie">
+    Browser profile is reused across requests — no re-login needed after the first setup.
+  </Card>
+  <Card title="Reactive ID interception" icon="satellite-dish">
+    User ID and profile metadata are captured from live network responses.
+  </Card>
+  <Card title="Smart scroll" icon="arrow-down">
+    Scrolling stops precisely when the API reports `hasMore: false`.
+  </Card>
+  <Card title="Profile assets" icon="user">
+    Avatar and header image are downloaded alongside post media.
+  </Card>
+</Columns>
+
+## Response
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": 987654,
+    "username": "example_creator",
+    "nickname": "Example Creator",
+    "picture": "https://cdn3.onlyfans.com/media/avatars/...",
+    "header": "https://cdn3.onlyfans.com/media/headers/...",
+    "url": "https://onlyfans.com/example_creator"
+  },
+  "total_requested": 100,
+  "total_proccessed": 100,
+  "downloads": [
+    { "status": "downloaded", "fileName": "profile_picture.jpg" },
+    { "status": "downloaded", "fileName": "112233445_p0.mp4" }
+  ]
+}
+```

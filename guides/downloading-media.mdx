@@ -1,0 +1,291 @@
+---
+title: "Downloading media"
+description: "How to trigger bulk media downloads and understand the download pipeline."
+---
+
+Every SMF endpoint follows the same pattern: send an HTTP GET request with a `username` (or `userId` for Pixiv) and an optional `limit`, and SMF handles the rest — launching a browser, scrolling the profile, collecting media URLs, downloading files concurrently, and saving them to disk.
+
+## The download pipeline
+
+<Steps>
+  <Step title="Send an HTTP GET request">
+    Call the endpoint for the platform you want to scrape. At minimum, provide a `username`:
+
+    ```bash
+    curl "http://localhost:3000/instagram/get-all-media?username=natgeo&limit=50"
+    ```
+
+    The `limit` parameter controls the maximum number of media items to download. Set it to `0` or omit it entirely to download all available media with no cap.
+  </Step>
+  <Step title="SMF launches a browser or makes API calls">
+    Depending on the platform's engine type:
+
+    - **Puppeteer platforms** (Instagram, X, Threads, TikTok, DeviantArt, OnlyFans): SMF launches a headless Chromium instance with your session cookies injected, then navigates to the user's profile page.
+    - **REST platforms** (Pixiv, Pinterest): SMF makes authenticated HTTP requests directly to the platform's internal API — no browser launch required.
+
+    Session cookies from your `.env` file are injected before any network requests are made.
+  </Step>
+  <Step title="SMF scrolls the profile and intercepts media URLs">
+    For Puppeteer-based platforms, SMF listens to network responses while scrolling:
+
+    ```javascript
+    page.on('response', async (response) => {
+        const url = response.url();
+        if (url.includes('/graphql/query') || url.includes('/api/v1/')) {
+            const data = await response.json().catch(() => ({}));
+            // extract media URLs from the API response
+        }
+    });
+    ```
+
+    As the page scrolls, the platform's API returns batches of media metadata. SMF parses each response and builds a task list of URLs to download.
+
+    Scroll stops when one of these conditions is met:
+    - The `limit` has been reached
+    - The page height stops growing after several retries (stagnation detection)
+    - The platform's API signals no more content (`hasMore: false`)
+  </Step>
+  <Step title="Files are downloaded concurrently">
+    Once the URL list is built, SMF downloads all files using a bounded promise pool (`mapLimit`):
+
+    ```javascript
+    const finalDownloads = await mapLimit(
+        tasks,
+        process.env.THREADS_DOWNLOAD || 5,
+        async (task) => {
+            return await downloadFile(task.url, task.dest, task.filename, headers);
+        }
+    );
+    ```
+
+    `THREADS_DOWNLOAD` (default: `5`) controls how many downloads run in parallel. Unlike `Promise.all`, `mapLimit` keeps exactly that many downloads active at all times — when one finishes, the next starts immediately.
+  </Step>
+  <Step title="Files are saved to the storage directory">
+    Files are saved to `DIR_STORAGE/{platform}/{username}/` with subdirectories for media type:
+
+    ```
+    storage/
+    └── instagram/
+        └── natgeo/
+            ├── posts/
+            │   ├── images/
+            │   │   └── 3498234982349823.jpg
+            │   └── videos/
+            │       └── 3498234982349824.mp4
+            ├── stories/
+            │   └── images/
+            └── highlights/
+                └── images/
+    ```
+
+    Profile pictures are always saved as `profile_picture.jpg` at the top of the user folder.
+  </Step>
+  <Step title="SMF returns a JSON summary">
+    When all downloads complete, SMF responds with a summary:
+
+    ```json
+    {
+      "status": true,
+      "profile": {
+        "id": "25025320",
+        "nickname": "National Geographic",
+        "username": "natgeo",
+        "picture": "https://...",
+        "url": "https://www.instagram.com/natgeo"
+      },
+      "total_requested": 50,
+      "total_proccessed": 50,
+      "downloads": [
+        { "id": "3498234982349823", "status": true },
+        ...
+      ]
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Download time scales with the size of the profile and the value of `THREADS_DOWNLOAD`. A profile with 1,000 posts at the default concurrency of 5 can take 10–20 minutes depending on file sizes and network speed. The HTTP request stays open until all downloads complete.
+</Note>
+
+## Endpoint reference
+
+| Platform | Endpoint | Key parameters |
+|---|---|---|
+| DeviantArt | `GET /deviantart/get-all-media` | `username`, `limit` |
+| OnlyFans | `GET /onlyfans/get-all-media` | `username`, `limit` |
+| Pixiv | `GET /pixiv/get-all-media` | `userId`, `limit`, `mediaType` |
+| X (Twitter) | `GET /x/get-all-media` | `username`, `limit`, `method` |
+| Threads | `GET /threads/get-all-media` | `username`, `limit` |
+| TikTok | `GET /tiktok/get-all-media` | `username`, `limit` |
+| Pinterest | `GET /pinterest/get-all-media` | `username`, `limit` |
+| Instagram | `GET /instagram/get-all-media` | `username`, `limit`, `mediaType` |
+
+## curl examples
+
+<CodeGroup>
+
+```bash Instagram
+# Download up to 100 posts, stories, and highlights
+curl "http://localhost:3000/instagram/get-all-media?username=natgeo&limit=100"
+
+# Download only posts and stories (no highlights)
+curl "http://localhost:3000/instagram/get-all-media?username=natgeo&mediaType=posts,stories"
+
+# Download all media (no limit)
+curl "http://localhost:3000/instagram/get-all-media?username=natgeo"
+```
+
+```bash X (Twitter)
+# Download up to 50 media items
+curl "http://localhost:3000/x/get-all-media?username=NatGeo&limit=50"
+
+# Use batch method (collects all URLs first, then downloads)
+curl "http://localhost:3000/x/get-all-media?username=NatGeo&limit=200&method=batch"
+```
+
+```bash Pixiv
+# Pixiv uses userId (numeric), not username
+curl "http://localhost:3000/pixiv/get-all-media?userId=1234567&limit=50"
+
+# Download only illustrations
+curl "http://localhost:3000/pixiv/get-all-media?userId=1234567&mediaType=illustrations"
+
+# Download only manga
+curl "http://localhost:3000/pixiv/get-all-media?userId=1234567&mediaType=mangas"
+```
+
+```bash DeviantArt
+curl "http://localhost:3000/deviantart/get-all-media?username=someartist&limit=100"
+```
+
+```bash OnlyFans
+curl "http://localhost:3000/onlyfans/get-all-media?username=someusername&limit=50"
+```
+
+```bash Pinterest
+curl "http://localhost:3000/pinterest/get-all-media?username=someuser&limit=100"
+```
+
+```bash TikTok
+curl "http://localhost:3000/tiktok/get-all-media?username=someuser&limit=30"
+```
+
+```bash Threads
+curl "http://localhost:3000/threads/get-all-media?username=someuser&limit=50"
+```
+
+</CodeGroup>
+
+## The limit parameter
+
+The `limit` query parameter controls the maximum number of media items to collect before stopping. It is optional on every endpoint.
+
+- **Omit `limit` or set it to `0`**: SMF collects all available media. For large profiles this can mean thousands of files.
+- **Set `limit` to a positive integer**: SMF stops collecting once that many items have been found and downloads only those.
+
+Profile pictures (`profile_picture.jpg`) and header banners are always downloaded regardless of the `limit` value, since they are added as separate tasks before the limit check applies.
+
+<Note>
+For Instagram, the `limit` counts individual media items (each image or video), not posts. A carousel post with 10 images counts as 10 items.
+</Note>
+
+## Filename sanitization
+
+SMF sanitizes all filenames before writing to disk to ensure compatibility with Windows and Linux file systems.
+
+The `sanitizeFilename` function in `utils/utils.js` applies these transformations:
+
+```javascript
+const sanitizeFilename = (text, limit = 25) => {
+    if (!text) return 'no_text';
+
+    let clean = text
+        .replace(/<[^>]*>/g, '')           // strip HTML tags
+        .replace(/[\\/:*?"<>|]/g, '_')     // replace reserved chars
+        .replace(/[\x00-\x1f\x80-\x9f]/g, '') // strip control chars
+        .trim()
+        .substring(0, limit)               // truncate to 25 chars
+        .replace(/[\s.]+$/, '')            // strip trailing spaces/dots
+        .trim();
+
+    const reservedNames = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
+    return reservedNames.test(clean) ? `${clean}_f` : (clean || 'no_text');
+};
+```
+
+Key behaviors:
+- Characters `\ / : * ? " < > |` are replaced with underscores
+- Filenames are truncated to 25 characters
+- Windows reserved names (`CON`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, etc.) get `_f` appended
+- Empty results fall back to `no_text`
+
+For OnlyFans, post folders are named with a combination of the post date, post ID, and sanitized post text:
+
+```
+storage/
+└── onlyfans/
+    └── someusername/
+        ├── profile_picture.jpg
+        ├── header_picture.jpg
+        ├── images/
+        │   └── 2024-03-15_398472398_check_out_my_new/
+        │       ├── 847293847_p0.jpg
+        │       └── 847293848_p1.jpg
+        └── videos/
+            └── 2024-02-01_398472100_happy_new_year/
+                └── 847200001_p0.mp4
+```
+
+## Storage directory structure
+
+All files are saved under `DIR_STORAGE` (set in `.env`, default: `./storage`). Each platform gets its own subdirectory, organized by username:
+
+```
+storage/
+├── deviantart/
+│   └── someartist/
+│       ├── profile_header.jpg
+│       ├── profile_picture.jpg
+│       └── illustrations/
+│           └── landscape_study/
+│               └── 1234567_landscape_study.jpg
+├── instagram/
+│   └── natgeo/
+│       ├── profile_picture.jpg
+│       ├── posts/images/
+│       ├── posts/videos/
+│       ├── stories/images/
+│       └── highlights/images/
+├── x/
+│   └── NatGeo/
+│       ├── profile_picture.jpg
+│       └── posts/
+│           ├── images/
+│           └── videos/
+├── pixiv/
+│   └── ArtistName/
+│       ├── profile_picture.jpg
+│       ├── illustrations/
+│       │   └── Artwork Title/
+│       │       ├── 1234567_p0.jpg
+│       │       └── 1234567_p1.jpg
+│       └── mangas/
+├── pinterest/
+│   └── someuser/
+│       ├── images/
+│       └── videos/
+├── tiktok/
+│   └── someuser/
+│       ├── images/
+│       └── videos/
+├── threads/
+│   └── someuser/
+│       └── posts/
+│           ├── images/
+│           └── videos/
+└── onlyfans/
+    └── someusername/
+        ├── images/
+        └── videos/
+```

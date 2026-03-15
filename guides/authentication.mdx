@@ -1,0 +1,229 @@
+---
+title: "Authentication"
+description: "How SMF uses session cookies to authenticate with social media platforms."
+---
+
+SMF does not implement OAuth or any login flow. Instead, it uses **cookie injection**: you extract session cookies from your browser and place them in the `.env` file. SMF then injects these cookies directly into the browser context (Puppeteer) or the HTTP headers (REST-engine platforms) before making requests.
+
+This approach works because your browser session is already authenticated. SMF borrows that session to act on your behalf.
+
+<Warning>
+Session cookies are equivalent to your password. Never commit your `.env` file to version control, share it, or expose it publicly. Rotate your cookies if you believe they have been compromised.
+</Warning>
+
+## How cookie injection works
+
+For Puppeteer-based platforms (X, Instagram, Threads, DeviantArt), SMF calls `page.setCookie()` before navigating to the target URL:
+
+```javascript
+await page.setCookie(
+    { name: 'auth_token', value: process.env.X_AUTH_TOKEN, domain: '.x.com' }
+);
+```
+
+For REST-based platforms (Pixiv, Pinterest), the cookie is passed directly in the `Cookie` HTTP header:
+
+```javascript
+const PIXIV_HEADERS = {
+    'Cookie': `PHPSESSID=${process.env.PIXIV_PHPSESSID}`
+};
+```
+
+OnlyFans does not use cookie injection at all — it uses browser profile persistence instead. See [Session setup](/guides/session-setup) for details.
+
+## Extracting cookies from your browser
+
+<Steps>
+  <Step title="Open the platform in your browser">
+    Log in to the platform you want to configure (e.g., `x.com`, `instagram.com`). Make sure you are fully logged in before proceeding.
+  </Step>
+  <Step title="Open DevTools">
+    Press `F12` (or `Cmd+Option+I` on macOS) to open the browser DevTools panel.
+  </Step>
+  <Step title="Navigate to the Application tab">
+    Click the **Application** tab in DevTools. In the left sidebar, expand **Cookies** and select the site's domain.
+  </Step>
+  <Step title="Find the required cookie">
+    Use the table's filter or scroll to locate the cookie by name (e.g., `auth_token`). Click the row to see its full value in the detail panel below.
+  </Step>
+  <Step title="Copy the value">
+    Select and copy the entire value string from the **Value** column. Do not include the cookie name — only the value.
+  </Step>
+  <Step title="Paste into .env">
+    Open your `.env` file and assign the value to the corresponding variable:
+
+    ```env
+    X_AUTH_TOKEN=your_copied_value_here
+    ```
+  </Step>
+</Steps>
+
+## Per-platform cookie requirements
+
+<AccordionGroup>
+  <Accordion title="X (Twitter)">
+    **Environment variable:** `X_AUTH_TOKEN`
+
+    | Cookie name | Domain | Description |
+    |---|---|---|
+    | `auth_token` | `.x.com` | Primary session authentication token |
+
+    Navigate to `x.com`, open DevTools → Application → Cookies → `https://x.com`, and copy the value of `auth_token`.
+
+    ```env
+    X_AUTH_TOKEN=your_auth_token_value
+    ```
+
+    SMF injects this as a single cookie into the Puppeteer page before loading the user's media timeline at `https://x.com/{username}/media`.
+  </Accordion>
+
+  <Accordion title="Pixiv">
+    **Environment variable:** `PIXIV_PHPSESSID`
+
+    | Cookie name | Domain | Description |
+    |---|---|---|
+    | `PHPSESSID` | `pixiv.net` | PHP session identifier required for authenticated API access |
+
+    Navigate to `pixiv.net`, open DevTools → Application → Cookies → `https://www.pixiv.net`, and copy the value of `PHPSESSID`.
+
+    ```env
+    PIXIV_PHPSESSID=your_phpsessid_value
+    ```
+
+    Pixiv is a REST-engine platform. SMF passes this cookie in the `Cookie` header of every API request and also injects it as a `Referer` header to avoid 403 errors from Pixiv's image servers.
+  </Accordion>
+
+  <Accordion title="Pinterest">
+    **Environment variable:** `PINTEREST_COOKIE`
+
+    | Cookie name | Domain | Description |
+    |---|---|---|
+    | `_pinterest_sess` | `.pinterest.com` | Encrypted session cookie for Pinterest's internal API |
+
+    Navigate to `pinterest.com`, open DevTools → Application → Cookies → `https://www.pinterest.com`, and copy the value of `_pinterest_sess`.
+
+    ```env
+    PINTEREST_COOKIE=your_pinterest_sess_value
+    ```
+
+    Pinterest is a REST-engine platform. SMF uses the `UserActivityPinsResource` internal API endpoint and passes this cookie in request headers.
+  </Accordion>
+
+  <Accordion title="Instagram">
+    **Environment variables:** `INSTA_SESSIONID` and `INSTA_CSRF_TOKEN`
+
+    | Cookie name | Domain | Description |
+    |---|---|---|
+    | `sessionid` | `.instagram.com` | Authenticated session identifier |
+    | `csrftoken` | `.instagram.com` | CSRF protection token required for GraphQL requests |
+
+    Navigate to `instagram.com`, open DevTools → Application → Cookies → `https://www.instagram.com`, and copy both values.
+
+    ```env
+    INSTA_SESSIONID=your_sessionid_value
+    INSTA_CSRF_TOKEN=your_csrftoken_value
+    ```
+
+    SMF injects both cookies before navigating to stories, highlights, and the post feed. The `csrftoken` is required because Instagram's GraphQL API validates it on every query.
+  </Accordion>
+
+  <Accordion title="Threads">
+    **Environment variables:** `THREADS_SESSIONID` and `THREADS_CSRF_TOKEN`
+
+    | Cookie name | Domain | Description |
+    |---|---|---|
+    | `sessionid` | `.threads.com` | Authenticated session identifier |
+    | `csrftoken` | `.threads.com` | CSRF token required for GraphQL requests |
+
+    Navigate to `threads.com`, open DevTools → Application → Cookies → `https://www.threads.com`, and copy both values.
+
+    ```env
+    THREADS_SESSIONID=your_sessionid_value
+    THREADS_CSRF_TOKEN=your_csrftoken_value
+    ```
+
+    <Note>
+    Threads and Instagram share the same backend and authentication model. The cookies look similar but are scoped to different domains (`.threads.com` vs `.instagram.com`) and must be set separately.
+    </Note>
+  </Accordion>
+
+  <Accordion title="DeviantArt">
+    **Environment variables:** `DA_AUTH`, `DA_AUTH_SECURE`, `DA_USERINFO`, `DA_PX`, `DA_PXVID`, `DA_PXCTS`
+
+    DeviantArt requires two sets of cookies: standard authentication cookies and PerimeterX anti-bot cookies.
+
+    **Authentication cookies:**
+
+    | Cookie name | Env variable | Description |
+    |---|---|---|
+    | `auth` | `DA_AUTH` | Primary authentication cookie |
+    | `auth_secure` | `DA_AUTH_SECURE` | Secure session token |
+    | `userinfo` | `DA_USERINFO` | User profile metadata |
+
+    **PerimeterX anti-bot cookies:**
+
+    | Cookie name | Env variable | Description |
+    |---|---|---|
+    | `_px` | `DA_PX` | PerimeterX long-duration challenge token |
+    | `_pxvid` | `DA_PXVID` | PerimeterX visitor ID |
+    | `pxcts` | `DA_PXCTS` | PerimeterX client timestamp |
+
+    Navigate to `deviantart.com`, open DevTools → Application → Cookies → `https://www.deviantart.com`, and copy all six values.
+
+    ```env
+    # Authentication
+    DA_AUTH=your_auth_value
+    DA_AUTH_SECURE=your_auth_secure_value
+    DA_USERINFO=your_userinfo_value
+    # Anti-bot (PerimeterX)
+    DA_PX=your_px_value
+    DA_PXVID=your_pxvid_value
+    DA_PXCTS=your_pxcts_value
+    ```
+
+    <Warning>
+    The PerimeterX cookies (`_px`, `_pxvid`, `pxcts`) expire faster than standard auth cookies. If downloads stop working, re-extract all six cookies from your browser and update your `.env` file.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="OnlyFans">
+    OnlyFans does **not** use cookie injection. It relies on browser profile persistence — a saved Chrome profile folder that retains your login session across runs.
+
+    You log in once through a real browser window that SMF opens automatically, and subsequent runs reuse that session without any manual steps.
+
+    See [Session setup](/guides/session-setup) for the full setup walkthrough.
+  </Accordion>
+</AccordionGroup>
+
+## Complete .env reference
+
+Below is the full `.env.example` from the repository with all authentication variables:
+
+```env
+PORT=3000
+DIR_STORAGE=./storage
+THREADS_DOWNLOAD=5
+
+PINTEREST_COOKIE=
+
+INSTA_SESSIONID=
+INSTA_CSRF_TOKEN=
+
+THREADS_SESSIONID=
+THREADS_CSRF_TOKEN=
+
+X_AUTH_TOKEN=
+
+PIXIV_PHPSESSID=
+
+# --- DEVIANTART AUTH ---
+DA_AUTH=
+DA_AUTH_SECURE=
+DA_USERINFO=
+# --- DEVIANTART ANTI-BOT (PerimeterX) ---
+DA_PX=
+DA_PXVID=
+DA_PXCTS=
+```
+
+You only need to fill in variables for the platforms you intend to use. Platforms with empty values will fail with an authentication error when their endpoint is called.

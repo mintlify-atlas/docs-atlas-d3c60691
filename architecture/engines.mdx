@@ -1,0 +1,187 @@
+---
+title: "Engine types"
+description: "How SMF uses Puppeteer automation and direct REST APIs to bypass platform restrictions."
+---
+
+SMF uses two different strategies to extract media from social platforms, chosen based on each platform's technical constraints.
+
+<Tabs>
+  <Tab title="Puppeteer engines">
+    ## Puppeteer engines
+
+    Six platforms — X, OnlyFans, TikTok, Instagram, Threads, and DeviantArt — require a real browser. These platforms use JavaScript-heavy rendering, behavioral bot detection, and session validation that cannot be replicated with plain HTTP requests.
+
+    ### How it works
+
+    1. SMF launches a headless Chromium browser using `puppeteer-extra` with the `puppeteer-extra-plugin-stealth` plugin applied. The stealth plugin patches dozens of browser fingerprinting vectors (WebDriver flags, navigator properties, plugin lists, etc.) to make the browser indistinguishable from a real user session.
+
+    2. Auth cookies from your `.env` file are injected into the browser before any navigation:
+
+    ```javascript
+    // xController.js
+    puppeteer.use(StealthPlugin());
+
+    browser = await puppeteer.launch({
+        headless: 'new',
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+
+    await page.setCookie(
+        { name: 'auth_token', value: process.env.X_AUTH_TOKEN, domain: '.x.com' }
+    );
+    ```
+
+    3. The controller navigates to the user's media page and attaches a `response` listener. When the platform's internal API returns a JSON payload containing media URLs, the listener captures it:
+
+    ```javascript
+    // xController.js
+    page.on('response', async (response) => {
+        const url = response.url();
+        if (url.includes('UserTweets') || url.includes('UserMedia')) {
+            const data = await response.json().catch(() => null);
+            if (data) {
+                const { medias, user } = extractMediaFromXJson(data);
+                // ...
+            }
+        }
+    });
+    ```
+
+    4. The page is scrolled incrementally to trigger pagination. `moveMouseInCircle` runs between scroll events to simulate realistic cursor behavior.
+
+    ### Session persistence (OnlyFans)
+
+    OnlyFans has an especially strict login flow. The OnlyFans engine uses `userDataDir` to store a full persistent Chrome profile on disk:
+
+    ```javascript
+    // onlyfansController.js
+    const USER_DATA_DIR = path.join(__dirname, '../config/of_profile');
+
+    browser = await puppeteer.launch({
+        headless: false,
+        userDataDir: USER_DATA_DIR,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized']
+    });
+    ```
+
+    On first run, SMF waits up to five minutes for a manual login. Once completed, the session is persisted in `config/of_profile` and reused automatically on subsequent runs — no re-login required.
+
+    ### Stagnation detection (X, Threads)
+
+    Both the X and Threads controllers implement a stagnation counter that detects when scrolling stops producing new content:
+
+    ```javascript
+    // xController.js
+    if (seenIds.size === itemsBeforeScroll) {
+        stagnationRetries++;
+        if (stagnationRetries >= MAX_STAGNATION) {
+            console.log("[->] Límite de scroll alcanzado o bloqueo de sesión. Finalizando...");
+            break;
+        }
+    } else {
+        stagnationRetries = 0;
+    }
+    ```
+
+    After three consecutive scroll cycles with no new items, the engine stops. This prevents infinite loops on private or restricted profiles.
+
+    ### Puppeteer engine summary
+
+    | Platform | `headless` mode | Cookie injection | Special behavior |
+    |---|---|---|---|
+    | X | `'new'` | `auth_token` | Stagnation detection, dual method (normal/batch) |
+    | OnlyFans | `false` | Persistent profile | Manual login on first run, `hasMore` smart scroll |
+    | TikTok | `'new'` | None (public) | `moveMouseInCircle`, stall detection |
+    | Instagram | `'shell'` | `sessionid`, `csrftoken` | Stories, Highlights, Posts/Reels, GraphQL interception |
+    | Threads | `'new'` | `sessionid`, `csrftoken` | GraphQL interception, spoiler content detection |
+    | DeviantArt | `'shell'` | PerimeterX + auth cookies | CSRF token capture via network interception, DOM profile scraping |
+  </Tab>
+
+  <Tab title="REST engines">
+    ## REST engines
+
+    Two platforms — Pinterest and Pixiv — expose stable internal JSON APIs that can be called directly with plain HTTP requests. No browser automation is needed.
+
+    ### How it works
+
+    Both REST engines share the same pattern:
+
+    1. Build request headers that spoof a real browser session, including a `Referer` pointing to a page on the same domain.
+    2. Call the platform's internal API with `fetch`, using session cookies from `.env` for authentication.
+    3. Parse the JSON response to extract media URLs and pagination tokens.
+    4. Repeat until all pages are exhausted or the requested `limit` is reached.
+    5. Run all downloads through `mapLimit` to respect `THREADS_DOWNLOAD`.
+
+    ### Pinterest
+
+    Pinterest paginates via a `bookmark` cursor token. Each response includes a `bookmark` value for the next page:
+
+    ```javascript
+    // pinterestController.js
+    const PINTEREST_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...',
+        'X-Pinterest-PWS-Handler': `www/[username]/_created.js`,
+        'X-Requested-With': 'XMLHttpRequest',
+        'Accept': 'application/json',
+        'Referer': `https://www.pinterest.com/${username}/_created/`,
+        'Cookie': `${process.env.PINTEREST_COOKIE};`
+    };
+
+    // Pagination loop
+    const data = {
+        options: {
+            username,
+            bookmarks: currentBookmark ? [currentBookmark] : [],
+            field_set_key: "profile_created_grid_item",
+        }
+    };
+    const baseUrl = "https://mx.pinterest.com/resource/UserActivityPinsResource/get/";
+    const finalUrl = `${baseUrl}?source_url=/${username}/_created/&data=${encodeURIComponent(JSON.stringify(data))}`;
+
+    currentBookmark = result.resource_response?.bookmark;
+    hasMore = currentBookmark && currentBookmark !== '-end-';
+    ```
+
+    For video pins, Pinterest does not include the MP4 URL in the API response. SMF falls back to fetching the pin's HTML page and extracting the video URL from the source with a regex.
+
+    ### Pixiv
+
+    Pixiv's API requires a `Referer` header that matches the artwork being fetched, or the image server returns 403. SMF sets the referer dynamically per download:
+
+    ```javascript
+    // pixivController.js
+    const PIXIV_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...',
+        'Accept': 'application/json',
+        'Referer': `https://www.pixiv.net/en/users/${userId}/illustrations`,
+        'Cookie': `PHPSESSID=${process.env.PIXIV_PHPSESSID}`
+    };
+
+    // Per-file referer during download
+    return await downloadFile(item.url, item.dest, item.filename, {
+        ...PIXIV_HEADERS,
+        'Referer': `https://www.pixiv.net/en/artworks/${item.id}`
+    });
+    ```
+
+    Pixiv metadata is fetched in chunks of 48 IDs per request to stay within the API's batch limit:
+
+    ```javascript
+    const chunkSize = 48;
+    const chunks = [];
+    for (let i = 0; i < combinedIds.length; i += chunkSize) {
+        chunks.push(combinedIds.slice(i, i + chunkSize));
+    }
+    ```
+
+    Multi-page works (manga sets) are handled by fetching `/ajax/illust/{id}/pages` for each work, which returns all image URLs in the set.
+
+    ### REST engine summary
+
+    | Platform | Auth mechanism | Pagination | Special behavior |
+    |---|---|---|---|
+    | Pinterest | `PINTEREST_COOKIE` header | Bookmark cursor token | HTML fallback for video pin URLs |
+    | Pixiv | `PHPSESSID` cookie | Offset-based, chunked 48 IDs/request | Per-file `Referer` spoofing, multi-page artwork support |
+  </Tab>
+</Tabs>

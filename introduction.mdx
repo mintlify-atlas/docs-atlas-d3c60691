@@ -1,13 +1,13 @@
 ---
-title: "Social Media Fetcher"
-description: "Bulk download images and videos from 8 major social media platforms via a single REST API."
+title: "Introduction"
+description: "Social Media Fetcher (SMF) — bulk download images and videos from 8 major social platforms via a single REST API."
 ---
 
 ## What is Social Media Fetcher?
 
-**Social Media Fetcher (SMF)** is a Node.js REST API that automates the bulk backup and synchronization of media assets — images and videos — from major social media platforms.
+**Social Media Fetcher (SMF)** is a Node.js REST API that automates the bulk backup and synchronization of media assets (images and videos) from major social media platforms.
 
-SMF uses browser automation (Puppeteer with stealth plugins) and direct REST/GraphQL API consumption to reliably extract media at scale without triggering platform security systems.
+SMF uses a combination of browser automation (Puppeteer with stealth plugins) and direct REST/GraphQL API consumption to reliably extract media at scale without triggering platform security systems.
 
 <CardGroup cols={2}>
   <Card title="Quickstart" icon="rocket" href="/quickstart">
@@ -17,7 +17,7 @@ SMF uses browser automation (Puppeteer with stealth plugins) and direct REST/Gra
     Configure authentication tokens, storage paths, and concurrency settings.
   </Card>
   <Card title="API Reference" icon="code" href="/api/overview">
-    Explore all 8 platform endpoints with full parameter documentation.
+    Explore all 8 platform endpoints with full parameter and response documentation.
   </Card>
   <Card title="Architecture" icon="building" href="/architecture/overview">
     Understand SMF's layered engine design and concurrency model.
@@ -44,7 +44,7 @@ SMF uses browser automation (Puppeteer with stealth plugins) and direct REST/Gra
     Puppeteer stealth plugins and cookie injection to avoid detection on protected platforms.
   </Card>
   <Card title="Concurrent downloads" icon="bolt">
-    Configurable promise pool keeps exactly N downloads active at all times.
+    Configurable promise pool (`THREADS_DOWNLOAD`) keeps exactly N downloads active at all times.
   </Card>
   <Card title="Session persistence" icon="user-lock">
     Browser profile persistence for OnlyFans prevents repeated logins and session blocks.

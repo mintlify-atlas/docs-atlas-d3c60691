@@ -1,0 +1,213 @@
+---
+title: "Configuration"
+description: "Configure environment variables, storage, and concurrency settings."
+---
+
+SMF is configured entirely through environment variables. Copy `.env.example` to `.env` and fill in the values before starting the server.
+
+<Warning>
+  Never commit your `.env` file to version control. The auth cookies it contains grant full account access. Add `.env` to your `.gitignore`.
+</Warning>
+
+## Core settings
+
+<ParamField path="PORT" type="number" default="3000">
+  The port the Express server listens on.
+
+  ```env
+  PORT=3000
+  ```
+</ParamField>
+
+<ParamField path="DIR_STORAGE" type="string" default="./storage">
+  Root directory where all downloaded media is saved. SMF creates per-platform and per-user subdirectories automatically.
+
+  ```
+  ./storage/
+  ├── deviantart/
+  │   └── username/
+  ├── instagram/
+  │   └── username/
+  └── pixiv/
+      └── username/
+  ```
+
+  ```env
+  DIR_STORAGE=./storage
+  ```
+</ParamField>
+
+<ParamField path="THREADS_DOWNLOAD" type="number" default="5">
+  Maximum number of concurrent file downloads. SMF uses a bounded promise pool (see [Concurrency model](/architecture/concurrency)) rather than `Promise.all`, so this value caps the active download count at any moment.
+
+  Raise this for faster downloads on high-bandwidth connections; lower it if you encounter rate limiting or IP bans.
+
+  ```env
+  THREADS_DOWNLOAD=5
+  ```
+</ParamField>
+
+## Auth credentials
+
+Each platform requires one or more session cookies copied from a logged-in browser session. SMF injects these cookies into Puppeteer or attaches them as HTTP headers, depending on the engine type.
+
+<Tip>
+  To extract cookies: open DevTools in your browser → Application tab → Cookies → copy the relevant `name=value` pairs.
+</Tip>
+
+<AccordionGroup>
+  <Accordion title="X (Twitter)">
+    <ParamField path="X_AUTH_TOKEN" type="string">
+      The `auth_token` cookie from `x.com`. This is the primary session token injected into the Puppeteer browser before navigating to a user's media page.
+
+      ```env
+      X_AUTH_TOKEN=your_auth_token_here
+      ```
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Pixiv">
+    <ParamField path="PIXIV_PHPSESSID" type="string">
+      The `PHPSESSID` cookie from `pixiv.net`. Used as a `Cookie` header in direct REST API requests to Pixiv's internal Ajax endpoints.
+
+      ```env
+      PIXIV_PHPSESSID=your_phpsessid_here
+      ```
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Pinterest">
+    <ParamField path="PINTEREST_COOKIE" type="string">
+      The full cookie string from `pinterest.com`, including `_pinterest_sess`. Passed as the `Cookie` header in direct API requests to Pinterest's internal resource endpoints.
+
+      ```env
+      PINTEREST_COOKIE=_pinterest_sess=...
+      ```
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Instagram">
+    <ParamField path="INSTA_SESSIONID" type="string">
+      The `sessionid` cookie from `instagram.com`. Injected into the Puppeteer browser as an `httpOnly` cookie before navigating to the profile.
+
+      ```env
+      INSTA_SESSIONID=your_session_id_here
+      ```
+    </ParamField>
+
+    <ParamField path="INSTA_CSRF_TOKEN" type="string">
+      The `csrftoken` cookie from `instagram.com`. Required alongside `INSTA_SESSIONID` for authenticated GraphQL requests.
+
+      ```env
+      INSTA_CSRF_TOKEN=your_csrf_token_here
+      ```
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Threads">
+    <ParamField path="THREADS_SESSIONID" type="string">
+      The `sessionid` cookie from `threads.com`. Injected into the Puppeteer browser before navigating to a user's media feed.
+
+      ```env
+      THREADS_SESSIONID=your_session_id_here
+      ```
+    </ParamField>
+
+    <ParamField path="THREADS_CSRF_TOKEN" type="string">
+      The `csrftoken` cookie from `threads.com`. Required alongside `THREADS_SESSIONID`.
+
+      ```env
+      THREADS_CSRF_TOKEN=your_csrf_token_here
+      ```
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="DeviantArt">
+    DeviantArt uses two separate cookie groups: standard auth cookies and PerimeterX anti-bot cookies. All six variables are read by `daAuthService` and formatted into a single `Cookie` header string.
+
+    **Auth cookies**
+
+    <ParamField path="DA_AUTH" type="string">
+      The `auth` cookie from `deviantart.com`.
+
+      ```env
+      DA_AUTH=your_auth_cookie_here
+      ```
+    </ParamField>
+
+    <ParamField path="DA_AUTH_SECURE" type="string">
+      The `auth_secure` cookie from `deviantart.com`.
+
+      ```env
+      DA_AUTH_SECURE=your_auth_secure_cookie_here
+      ```
+    </ParamField>
+
+    <ParamField path="DA_USERINFO" type="string">
+      The `userinfo` cookie from `deviantart.com`. Contains encoded user metadata.
+
+      ```env
+      DA_USERINFO=your_userinfo_cookie_here
+      ```
+    </ParamField>
+
+    **PerimeterX anti-bot cookies**
+
+    <Note>
+      These three cookies are required to pass DeviantArt's PerimeterX bot detection. They have limited lifespans and need periodic refreshing.
+    </Note>
+
+    <ParamField path="DA_PX" type="string">
+      The `_px` PerimeterX cookie from `deviantart.com`. This is the long-duration token.
+
+      ```env
+      DA_PX=your_px_cookie_here
+      ```
+    </ParamField>
+
+    <ParamField path="DA_PXVID" type="string">
+      The `_pxvid` PerimeterX visitor ID cookie from `deviantart.com`.
+
+      ```env
+      DA_PXVID=your_pxvid_cookie_here
+      ```
+    </ParamField>
+
+    <ParamField path="DA_PXCTS" type="string">
+      The `pxcts` PerimeterX client token-session cookie from `deviantart.com`.
+
+      ```env
+      DA_PXCTS=your_pxcts_cookie_here
+      ```
+    </ParamField>
+  </Accordion>
+</AccordionGroup>
+
+## Complete .env example
+
+```env
+PORT=3000
+DIR_STORAGE=./storage
+THREADS_DOWNLOAD=5
+
+PINTEREST_COOKIE=
+
+INSTA_SESSIONID=
+INSTA_CSRF_TOKEN=
+
+THREADS_SESSIONID=
+THREADS_CSRF_TOKEN=
+
+X_AUTH_TOKEN=
+
+PIXIV_PHPSESSID=
+
+# --- DEVIANTART AUTH ---
+DA_AUTH=
+DA_AUTH_SECURE=
+DA_USERINFO=
+# --- DEVIANTART ANTI-BOT (PerimeterX) ---
+DA_PX=
+DA_PXVID=
+DA_PXCTS=
+```

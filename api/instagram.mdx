@@ -1,0 +1,105 @@
+---
+title: 'Instagram'
+description: 'Download Stories, Highlights, Posts, and Reels from Instagram profiles.'
+---
+
+## Endpoint
+
+```
+GET /instagram/get-all-media
+```
+
+## Parameters
+
+<ParamField query="username" type="string" required>
+  Instagram username as it appears in the profile URL: `instagram.com/<username>/`.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of media items to download across all content types combined. Omit for no limit.
+</ParamField>
+
+## Example
+
+```bash
+curl "http://localhost:3000/instagram/get-all-media?username=natgeo&limit=100"
+```
+
+## How it works
+
+The Instagram engine uses Puppeteer with session cookie injection to access the internal GraphQL API.
+
+1. **Cookie injection** — `sessionid` and `csrftoken` cookies are injected into the browser for the `.instagram.com` domain before any navigation.
+2. **Stories** — The engine navigates to `/stories/<username>/` first. Story items are extracted directly from inline `<script data-sjs>` JSON blobs using a recursive key search for `xdt_api__v1__feed__reels_media`. This avoids a separate API call and captures ephemeral content before it expires.
+3. **Highlights** — After navigating to the main profile page, the engine iterates over all highlight reel thumbnails (identified by `canvas[style*="position: absolute"]`), clicks each one, waits 4 seconds for the network response, then closes it. GraphQL responses for highlight reels are captured by the `response` listener.
+4. **Posts and Reels** — The page is scrolled to the bottom to trigger infinite-scroll loading. All `/graphql/query` and `/api/v1/` responses are parsed for post and reel media, including carousel items (`carousel_media`).
+5. **Profile picture** — The first post response that contains `user.hd_profile_pic_url_info.url` is used to set the profile picture, which is queued as a download task alongside the posts.
+6. **Content type filtering** — Each network response is classified as `posts`, `highlights`, or `stories` based on the presence of specific GraphQL field names. Only types listed in `allowedTypes` are processed.
+
+<Columns cols={2}>
+  <Card title="Stories" icon="circle-play">
+    Extracted from inline script tags before page navigation completes — captures active stories reliably.
+  </Card>
+  <Card title="Highlights" icon="star">
+    Each highlight reel is clicked and its GraphQL response is intercepted.
+  </Card>
+  <Card title="Posts and Reels" icon="grid-2">
+    Infinite scroll with carousel support ensures all post media is collected.
+  </Card>
+  <Card title="HD profile picture" icon="image">
+    Uses `hd_profile_pic_url_info.url` for the highest-resolution avatar available.
+  </Card>
+</Columns>
+
+## Environment variables
+
+| Variable | Cookie name | Description |
+|---|---|---|
+| `INSTA_SESSIONID` | `sessionid` | Session cookie from `instagram.com` |
+| `INSTA_CSRF_TOKEN` | `csrftoken` | CSRF token from `instagram.com` |
+
+```env
+INSTA_SESSIONID=your_sessionid_value
+INSTA_CSRF_TOKEN=your_csrftoken_value
+```
+
+## File layout
+
+Media is separated by content type and then by format:
+
+```
+storage/instagram/<username>/
+├── posts/
+│   ├── images/
+│   │   └── <mediaId>.jpg
+│   └── videos/
+│       └── <mediaId>.mp4
+├── stories/
+│   ├── images/
+│   └── videos/
+└── highlights/
+    ├── images/
+    └── videos/
+```
+
+## Response
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": "787132",
+    "username": "natgeo",
+    "nickname": "National Geographic",
+    "picture": "https://instagram.fxxx1-1.fna.fbcdn.net/v/...",
+    "url": "https://www.instagram.com/natgeo"
+  },
+  "total_requested": 100,
+  "total_proccessed": 100,
+  "downloads": [
+    { "status": "downloaded", "fileName": "profile_picture.jpg" },
+    { "status": "downloaded", "fileName": "3456789012345678.jpg" },
+    { "status": "downloaded", "fileName": "3456789012345679.mp4" }
+  ]
+}
+```

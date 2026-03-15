@@ -1,0 +1,164 @@
+---
+title: 'API overview'
+description: 'All SMF endpoints at a glance — base URL, common parameters, and response format.'
+---
+
+SMF (Social Media Fetcher) exposes a single-purpose REST API for bulk downloading images and videos from social media platforms. Every endpoint follows the same conventions: a `GET` request with query parameters, a synchronous response, and a uniform JSON envelope.
+
+## Base URL
+
+```
+http://localhost:3000
+```
+
+The port is configurable via the `PORT` environment variable. If `PORT` is not set, the server defaults to `3000`.
+
+## Authentication
+
+No API key is required to call SMF endpoints. Authentication to third-party platforms is handled entirely server-side through session cookies and tokens configured in a `.env` file. See each platform page for the specific environment variables required.
+
+<Note>
+  All requests are **synchronous**. The HTTP response is not sent until all media files have been downloaded to disk. For large profiles this can take several minutes — plan your client timeouts accordingly.
+</Note>
+
+## Endpoints
+
+| Platform | Method | Path | Parameters |
+|---|---|---|---|
+| [DeviantArt](/api/deviantart) | `GET` | `/deviantart/get-all-media` | `username`, `limit` |
+| [OnlyFans](/api/onlyfans) | `GET` | `/onlyfans/get-all-media` | `username`, `limit` |
+| [Pixiv](/api/pixiv) | `GET` | `/pixiv/get-all-media` | `userId`, `limit`, `mediaType` |
+| [X (Twitter)](/api/x-twitter) | `GET` | `/x/get-all-media` | `username`, `limit`, `method` |
+| [Threads](/api/threads) | `GET` | `/threads/get-all-media` | `username`, `limit` |
+| [TikTok](/api/tiktok) | `GET` | `/tiktok/get-all-media` | `username`, `limit` |
+| [Pinterest](/api/pinterest) | `GET` | `/pinterest/get-all-media` | `username`, `limit` |
+| [Instagram](/api/instagram) | `GET` | `/instagram/get-all-media` | `username`, `limit` |
+
+## Common parameters
+
+The following parameters appear across most endpoints.
+
+<ParamField query="username" type="string" required>
+  The platform username to scrape. For most platforms this is the profile handle (without `@`). Pixiv uses `userId` (a numeric ID) instead.
+</ParamField>
+
+<ParamField query="limit" type="number">
+  Maximum number of media items to download. When omitted or set to `0`, SMF downloads all available content. The limit applies to media files, not pages/posts — a single post with multiple images counts as multiple items.
+</ParamField>
+
+## Response format
+
+Every endpoint returns a JSON object with a consistent top-level structure.
+
+### Success
+
+```json
+{
+  "status": true,
+  "profile": {
+    "id": "123456",
+    "username": "example_user",
+    "nickname": "Example User",
+    "picture": "https://cdn.example.com/avatar.jpg",
+    "url": "https://platform.com/example_user"
+  },
+  "total_requested": 50,
+  "total_proccessed": 50,
+  "downloads": [
+    { "status": "downloaded", "fileName": "12345_p0.jpg" },
+    { "status": "exists",     "fileName": "12345_p1.jpg" },
+    { "status": "error",      "fileName": "99999_p0.jpg", "error": "Request failed with status 403" }
+  ]
+}
+```
+
+### Error
+
+When an unrecoverable error occurs, the endpoint returns an HTTP `500` with:
+
+```json
+{
+  "status": false,
+  "error": "Description of the error"
+}
+```
+
+A `400` is returned when a required parameter is missing:
+
+```json
+{
+  "error": "username is required"
+}
+```
+
+### Response fields
+
+<ResponseField name="status" type="boolean" required>
+  `true` on success, `false` on error.
+</ResponseField>
+
+<ResponseField name="profile" type="object">
+  Metadata about the scraped profile.
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">
+      Platform-specific user ID.
+    </ResponseField>
+    <ResponseField name="username" type="string">
+      Platform handle.
+    </ResponseField>
+    <ResponseField name="nickname" type="string">
+      Display name.
+    </ResponseField>
+    <ResponseField name="picture" type="string">
+      Profile picture URL.
+    </ResponseField>
+    <ResponseField name="url" type="string">
+      Full profile URL on the platform.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="total_requested" type="number">
+  The value of the `limit` parameter, or `null` when no limit was specified.
+</ResponseField>
+
+<ResponseField name="total_proccessed" type="number">
+  Number of download tasks that were processed.
+</ResponseField>
+
+<ResponseField name="downloads" type="array">
+  Array of per-file download results. Each entry contains:
+  <Expandable title="properties">
+    <ResponseField name="status" type="string" required>
+      `"downloaded"` — file was saved. `"exists"` — file already present on disk, skipped. `"error"` — download failed.
+    </ResponseField>
+    <ResponseField name="fileName" type="string">
+      Local filename on disk.
+    </ResponseField>
+    <ResponseField name="error" type="string">
+      Error message. Present only when `status` is `"error"`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Concurrency
+
+SMF uses a promise-pool algorithm (`mapLimit`) to run downloads in parallel. The pool size is set by the `THREADS_DOWNLOAD` environment variable (default: `5`). Increasing this value speeds up large downloads but may trigger rate-limiting on the target platform.
+
+## File storage
+
+All downloaded files are written to the path specified by `DIR_STORAGE` (default: `./storage`). Files are organised into sub-directories by platform and username:
+
+```
+./storage/
+├── deviantart/<username>/
+├── instagram/<username>/
+│   ├── posts/images/
+│   ├── posts/videos/
+│   ├── stories/images/
+│   └── highlights/images/
+├── pixiv/<nickname>/
+│   ├── illustrations/<title>/
+│   └── mangas/<title>/
+└── ...
+```
